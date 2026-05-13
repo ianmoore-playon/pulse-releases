@@ -152,3 +152,37 @@ Write-Host ""
 Write-Host "  Launching $($exe.FullName)" -ForegroundColor Green
 Write-Host ""
 Start-Process -FilePath $exe.FullName
+
+# ---- Legacy %LOCALAPPDATA% install cleanup ----------------------------------
+# When the elevated path moves the install to Program Files (x86), any prior
+# %LOCALAPPDATA%\Pulse.WPF\Pulse.WPF-pilot-* artifact folders are dead weight.
+# Sweep them — but PRESERVE Logs\, Reports\, settings.json under the same
+# parent, because AppLogFile + ReportsService + AppSettings hard-code those
+# paths against %LOCALAPPDATA% (independent of where the EXE is installed).
+# No-op when the installer used the LOCALAPPDATA fallback (the new install is
+# still under there and we'd be deleting our own files).
+$legacyDir = Join-Path $env:LOCALAPPDATA 'Pulse.WPF'
+if ((Test-Path $legacyDir) -and
+    ($installDir -ne $legacyDir) -and
+    (-not $installDir.StartsWith($legacyDir, [System.StringComparison]::OrdinalIgnoreCase))) {
+
+    $artifactDirs = @(
+        Get-ChildItem -Path $legacyDir -Directory -Filter 'Pulse.WPF-pilot-*' `
+                      -ErrorAction SilentlyContinue
+    )
+    if ($artifactDirs.Count -gt 0) {
+        Write-Host "  Cleaning up legacy per-user install artifacts..." -ForegroundColor Gray
+        foreach ($d in $artifactDirs) {
+            try {
+                Remove-Item $d.FullName -Recurse -Force -ErrorAction Stop
+                Write-Host "    Removed: $($d.Name)" -ForegroundColor DarkGray
+            } catch {
+                # If a file is still locked (rare — Pulse.WPF.exe was stopped
+                # earlier in the script), leave the orphan in place and
+                # surface a soft warning. Next launch retries.
+                Write-Host "    Skipped: $($d.Name) - $($_.Exception.Message)" -ForegroundColor DarkYellow
+            }
+        }
+        Write-Host "  Preserved: Logs\, Reports\, settings.json (user data)" -ForegroundColor DarkGray
+    }
+}
